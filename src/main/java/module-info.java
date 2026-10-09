@@ -27,6 +27,10 @@
 module org.openjdk.jextract {
     requires transitive java.compiler;
     exports org.openjdk.jextract;
+    // jarrunner fork: the TeaVM binding generator in teavm/ uses jextract's parser and reads its
+    // layout attribute records, so it gets the implementation package, and nothing else does.
+    exports org.openjdk.jextract.impl to jarrunner.jextract_teavm;
+    opens org.openjdk.jextract.impl to jarrunner.jextract_teavm;
 
     provides java.util.spi.ToolProvider with
         org.openjdk.jextract.JextractTool.JextractToolProvider;
