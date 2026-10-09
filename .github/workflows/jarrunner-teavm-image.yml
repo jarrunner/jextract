@@ -1,0 +1,182 @@
+# jarrunner fork: builds the jextract-teavm runtime image (jextract + the TeaVM binding generator in teavm/) on
+# Linux and Windows, smoke-tests it, and attaches it to a GitHub release for tags teavm-v*. The toolchain, LLVM
+# and caching steps are upstream's own (test.yml), so the image is built exactly as upstream builds jextract.
+name: jextract-teavm image
+
+on:
+  push:
+    tags: ['teavm-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  TOOLCHAIN_VERSION: 25
+  GRADLE_JAVA_VERSION: 21
+  CLANG_LLVM_VERSION: 13.0.0
+  CLANG_LLVM_BASE_URL: "https://github.com/llvm/llvm-project/releases/download/llvmorg-13.0.0/"
+
+jobs:
+  image:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            TARGET: clang+llvm-13.0.0-x86_64-linux-gnu-ubuntu-20.04
+            ARCHIVE_EXT: "tar.xz"
+            LIB_DIR: lib
+            DEPS_ROOT: /tmp/deps
+            NAME: linux-x64
+          - os: windows-latest
+            TARGET: LLVM-13.0.0-win64
+            ARCHIVE_EXT: "exe"
+            LIB_DIR: bin
+            DEPS_ROOT: C:/tmp/deps
+            NAME: windows-x64
+
+    steps:
+    - name: 'Check out repository'
+      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      with:
+        fetch-depth: 1
+
+    - name: 'Prepare'
+      shell: sh
+      run: |
+        mkdir -p ${{ matrix.DEPS_ROOT }}
+
+    - name: 'Check cache for toolchain JDK'
+      id: get-cached-toolchain
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      with:
+        path: ${{ matrix.DEPS_ROOT }}/jdk-toolchain
+        key: jdk-toolchain-${{ env.TOOLCHAIN_VERSION }}-${{ matrix.os }}
+
+    - name: 'Download toolchain JDK'
+      id: download-toolchain-jdk
+      uses: oracle-actions/setup-java@fff43251af9936a0e6a4d5d0946e14f1680e9b6b # v1.5.0
+      if: ${{ steps.get-cached-toolchain.outputs.cache-hit != 'true' }}
+      with:
+        website: oracle.com
+        release: ${{ env.TOOLCHAIN_VERSION }}
+        install: false
+
+    - name: 'Extract Toolchain JDK (Non Windows)'
+      if: ${{ matrix.os != 'windows-latest' && steps.get-cached-toolchain.outputs.cache-hit != 'true' }}
+      shell: sh
+      run: |
+        mkdir -p ${{ matrix.DEPS_ROOT }}/jdk-toolchain/unpacked
+        tar --strip-components=1 -xvf ${{ steps.download-toolchain-jdk.outputs.archive }} -C ${{ matrix.DEPS_ROOT }}/jdk-toolchain/unpacked
+        ls -lah ${{ matrix.DEPS_ROOT }}/jdk-toolchain/unpacked
+        jdk_root="$(dirname $(find ${{ matrix.DEPS_ROOT }}/jdk-toolchain/unpacked -name bin -type d))"
+        echo "jdk_root = $jdk_root"
+        mv "$jdk_root"/* ${{ matrix.DEPS_ROOT }}/jdk-toolchain/
+        ls -lah ${{ matrix.DEPS_ROOT }}/jdk-toolchain
+        ${{ matrix.DEPS_ROOT }}/jdk-toolchain/bin/java --version
+
+    - name: 'Extract Toolchain JDK (Windows)'
+      if: ${{ matrix.os == 'windows-latest' && steps.get-cached-toolchain.outputs.cache-hit != 'true' }}
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory ${{ matrix.DEPS_ROOT }}/jdk-toolchain/unpacked
+        7z x ${{ steps.download-toolchain-jdk.outputs.archive }} -o${{ matrix.DEPS_ROOT }}/jdk-toolchain/unpacked
+        ls ${{ matrix.DEPS_ROOT }}/jdk-toolchain/unpacked
+        $jdk_root = Get-ChildItem -Path ${{ matrix.DEPS_ROOT }}/jdk-toolchain/unpacked/*/bin -Recurse | Select-Object -First 1 | %{ $_.Parent.Parent.FullName }
+        Write-Host "jdk_root = $jdk_root"
+        Move-Item -Path "$jdk_root/*" -Destination ${{ matrix.DEPS_ROOT }}/jdk-toolchain/
+        ls ${{ matrix.DEPS_ROOT }}/jdk-toolchain/
+        ${{ matrix.DEPS_ROOT }}/jdk-toolchain/bin/java --version
+
+    - name: 'Setup Gradle Java'
+      uses: oracle-actions/setup-java@fff43251af9936a0e6a4d5d0946e14f1680e9b6b # v1.5.0
+      with:
+        website: oracle.com
+        release: ${{ env.GRADLE_JAVA_VERSION }}
+
+    - name: 'Check default Java version'
+      shell: sh
+      run: |
+        java --version
+        echo JAVA_HOME=$JAVA_HOME
+
+    - name: 'Check cache for LLVM'
+      id: get-cached-llvm
+      uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      with:
+        path: ${{ matrix.DEPS_ROOT }}/llvm/image
+        key: llvm-${{ env.CLANG_LLVM_VERSION }}-${{ matrix.os }}
+
+    - name: 'Download and extract LLVM'
+      if: ${{ steps.get-cached-llvm.outputs.cache-hit != 'true' }}
+      shell: bash
+      run: |
+        mkdir -p ${{ matrix.DEPS_ROOT }}/llvm/unpacked
+        curl -L ${{ env.CLANG_LLVM_BASE_URL }}${{ matrix.TARGET }}.${{ matrix.ARCHIVE_EXT }} -o ${{ matrix.DEPS_ROOT }}/llvm/LLVM.${{ matrix.ARCHIVE_EXT }}
+        if [ "${{ matrix.ARCHIVE_EXT }}" = "exe" ]; then
+          7z x ${{ matrix.DEPS_ROOT }}/llvm/LLVM.${{ matrix.ARCHIVE_EXT }} -o${{ matrix.DEPS_ROOT }}/llvm/unpacked
+        else
+          tar --strip-components=1 -xvf ${{ matrix.DEPS_ROOT }}/llvm/LLVM.${{ matrix.ARCHIVE_EXT }} -C ${{ matrix.DEPS_ROOT }}/llvm/unpacked
+        fi
+        ls -lah ${{ matrix.DEPS_ROOT }}/llvm/unpacked
+
+    - name: 'Create trimmed-down libclang image (for faster caching)'
+      if: ${{ steps.get-cached-llvm.outputs.cache-hit != 'true' }}
+      shell: bash
+      run: |
+        mkdir -p ${{ matrix.DEPS_ROOT }}/llvm/image/${{ matrix.LIB_DIR }}/
+        cp -a ${{ matrix.DEPS_ROOT }}/llvm/unpacked/${{ matrix.LIB_DIR }}/libclang.* ${{ matrix.DEPS_ROOT }}/llvm/image/${{ matrix.LIB_DIR }}/
+        mkdir -p ${{ matrix.DEPS_ROOT }}/llvm/image/include/clang-c
+        cp -a ${{ matrix.DEPS_ROOT }}/llvm/unpacked/include/clang-c/. ${{ matrix.DEPS_ROOT }}/llvm/image/include/clang-c/
+        mkdir -p ${{ matrix.DEPS_ROOT }}/llvm/image/lib/clang/$CLANG_LLVM_VERSION/include/
+        cp -a ${{ matrix.DEPS_ROOT }}/llvm/unpacked/lib/clang/$CLANG_LLVM_VERSION/include/. ${{ matrix.DEPS_ROOT }}/llvm/image/lib/clang/$CLANG_LLVM_VERSION/include/
+        ls -lah ${{ matrix.DEPS_ROOT }}/llvm/image
+
+    - name: 'Build the jextract-teavm image'
+      shell: sh
+      run: |
+        sh ./gradlew -Pjdk_home=${{ matrix.DEPS_ROOT }}/jdk-toolchain -Pllvm_home=${{ matrix.DEPS_ROOT }}/llvm/image clean createJextractTeavmImage
+
+    - name: 'Smoke test: generate bindings for a tiny header'
+      shell: bash
+      run: |
+        mkdir -p smoke && cd smoke
+        printf '#define ANSWER 42\nint add(int a, int b);\nstruct pt { int x; long long y; };\n' > tiny.h
+        printf 'ANSWER\nadd\nstruct:pt pt\n' > tiny.symbols
+        bin=../build/jextract-teavm/bin/jextract-teavm
+        [ -f "$bin.bat" ] && bin="$bin.bat"
+        "$bin" tiny.h --symbols tiny.symbols --package smoke -o gen --verify-c verify.c
+        grep -q 'ANSWER = 42' gen/smoke/Bindings.java
+        grep -q 'native int add(int' gen/smoke/Bindings.java
+        grep -q '_Static_assert' verify.c
+        echo "smoke test passed"
+
+    - name: 'Archive the image'
+      shell: bash
+      run: |
+        cd build
+        if [ "${{ matrix.os }}" = windows-latest ]; then 7z a -tzip ../jextract-teavm-${{ matrix.NAME }}.zip jextract-teavm > /dev/null; else tar -czf ../jextract-teavm-${{ matrix.NAME }}.tar.gz jextract-teavm; fi
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: jextract-teavm-${{ matrix.NAME }}
+        path: jextract-teavm-${{ matrix.NAME }}.*
+        if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/teavm-v')
+    needs: [image]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: in
+      - name: 'Publish the release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir out && find in -type f -exec cp {} out/ \;
+          (cd out && sha256sum * > SHA256SUMS)
+          gh release create "${{ github.ref_name }}" out/* -R "${{ github.repository }}" --title "${{ github.ref_name }}" --notes "jextract with the TeaVM binding generator (teavm/), runtime images for Linux x64 and Windows x64. See teavm/README.md."

@@ -1,0 +1,61 @@
+// jarrunner fork: builds the TeaVM binding generator (module jarrunner.jextract_teavm, Apache License 2.0, see
+// teavm/LICENSE) against this jextract, and links both into one runtime image with a jextract-teavm launcher.
+// Applied from build.gradle; upstream's own tasks are not changed.
+//
+//   gradlew -Pjdk_home=<JDK 25> -Pllvm_home=<LLVM> createJextractTeavmImage
+//   -> build/jextract-teavm/bin/jextract-teavm[.bat]
+import org.apache.tools.ant.taskdefs.condition.Os
+
+configurations {
+    teavmPicocli
+}
+
+dependencies {
+    teavmPicocli 'info.picocli:picocli:4.7.7'
+}
+
+def teavmBuildDir = layout.buildDirectory.dir("teavm").get()
+def teavmJarFile = "${teavmBuildDir}/jarrunner.jextract_teavm.jar"
+def teavmImageDir = layout.buildDirectory.dir("jextract-teavm").get()
+def teavmExeSuffix = Os.isFamily(Os.FAMILY_WINDOWS) ? ".exe" : ""
+
+task compileTeavm(type: JavaCompile) {
+    dependsOn jar
+    source = fileTree("${projectDir}/teavm/src/main/java")
+    destinationDirectory = file("${teavmBuildDir}/classes")
+    classpath = files()
+    options.release = 25
+    options.fork = true
+    options.forkOptions.executable = "${jdk_home}/bin/javac${teavmExeSuffix}"
+    doFirst {
+        options.compilerArgs = ["--module-path", files(jar.archiveFile, configurations.teavmPicocli).asPath]
+    }
+}
+
+task teavmJar(type: Jar) {
+    dependsOn compileTeavm
+    from compileTeavm.destinationDirectory
+    destinationDirectory = file(teavmBuildDir)
+    archiveFileName = "jarrunner.jextract_teavm.jar"
+    manifest { attributes("Main-Class": "jarrunner.jextract_teavm.Main") }
+}
+
+task createJextractTeavmImage(type: Exec) {
+    dependsOn createJextractJmod, teavmJar
+    inputs.file(teavmJarFile)
+    outputs.dir(teavmImageDir)
+    doFirst {
+        delete(teavmImageDir)
+        def modulePath = [layout.buildDirectory.dir("jmods").get().toString(), teavmJarFile] + configurations.teavmPicocli.files*.path
+        def nativeAccess = Os.isFamily(Os.FAMILY_WINDOWS) ? '\\"--enable-native-access=org.openjdk.jextract\\"' : '"--enable-native-access=org.openjdk.jextract"'
+        args = [
+            "--module-path=" + modulePath.join(File.pathSeparator),
+            "--add-modules=org.openjdk.jextract,jarrunner.jextract_teavm",
+            "--output=${teavmImageDir}",
+            "--strip-debug", "--no-man-pages", "--no-header-files",
+            "--add-options", nativeAccess,
+            "--launcher", "jextract-teavm=jarrunner.jextract_teavm/jarrunner.jextract_teavm.Main"
+        ]
+    }
+    executable = "${jdk_home}/bin/jlink${teavmExeSuffix}"
+}

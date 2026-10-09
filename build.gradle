@@ -291,3 +291,6 @@ tasks.register('writeLibClangVersion') {
 tasks.named("createJextractJmod") {
     dependsOn "writeLibClangVersion"
 }
+
+// jarrunner fork: the TeaVM binding generator, its own module under its own licence (teavm/teavm.gradle)
+apply from: "teavm/teavm.gradle"
