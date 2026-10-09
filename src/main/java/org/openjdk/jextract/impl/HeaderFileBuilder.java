@@ -585,6 +585,31 @@ class HeaderFileBuilder extends ClassSourceBuilder {
         return mangledName;
     }
 
+    /**
+     * A wide or Unicode string constant (wchar_t, char16_t, char32_t elements) must be laid out in
+     * that width, not as UTF-8: returns the extra allocateFrom argument naming the charset, or "".
+     */
+    private static String stringCharsetArg(Declaration declaration) {
+        if (!(declaration instanceof Declaration.Constant constant)) return "";
+        Type element = constant.type();
+        while (element instanceof Type.Delegated delegated) {
+            element = delegated.type();
+        }
+        if (!(element instanceof Type.Primitive primitive)) return "";
+        int size = switch (primitive.kind()) {
+            case Short, Char16 -> 2;
+            case Int -> 4;
+            case WChar -> TypeImpl.IS_WINDOWS ? 2 : 4;
+            default -> 1;
+        };
+        String order = java.nio.ByteOrder.nativeOrder() == java.nio.ByteOrder.LITTLE_ENDIAN ? "LE" : "BE";
+        return switch (size) {
+            case 2 -> ", java.nio.charset.StandardCharsets.UTF_16" + order;
+            case 4 -> ", java.nio.charset.StandardCharsets.UTF_32" + order;
+            default -> "";
+        };
+    }
+
     private void emitConstant(Class<?> javaType, String constantName, Object value, Declaration declaration) {
         incrAlign();
         if (value instanceof String) {
@@ -593,7 +618,7 @@ class HeaderFileBuilder extends ClassSourceBuilder {
                 public static %1$s %2$s() {
                     class Holder {
                         static final %1$s %2$s
-                            = %3$s.LIBRARY_ARENA.allocateFrom("%4$s");
+                            = %3$s.LIBRARY_ARENA.allocateFrom("%4$s"%5$s);
                     }
                     return Holder.%2$s;
                 }
@@ -601,7 +626,8 @@ class HeaderFileBuilder extends ClassSourceBuilder {
                 javaType.getSimpleName(),
                 constantName,
                 runtimeHelperName(),
-                Utils.quote(Objects.toString(value)));
+                Utils.quote(Objects.toString(value)),
+                stringCharsetArg(declaration));
         } else {
             appendLines("""
                 private static final %1$s %2$s = %3$s;

@@ -288,7 +288,11 @@ abstract class ClassSourceBuilder {
     // A " * " prefix is emitted for every line.
     static String declarationComment(Declaration decl) {
         Objects.requireNonNull(decl);
-        String declString = DeclarationString.getOrThrow(decl);
+        // javac translates unicode escapes before it recognizes comments, so a backslash followed by 'u'
+        // (a Windows path whose directory name starts with 'u', inside "(unnamed struct at <path>)") must
+        // not reach the source as-is. It is written as the unicode escape for a backslash itself, which
+        // cannot start another unicode escape (JLS 3.3).
+        String declString = DeclarationString.getOrThrow(decl).replaceAll("\\\\(?=u)", "\\\\u005c");
         return declString.lines().collect(Collectors.joining("\n * ", " * ", ""));
     }
 

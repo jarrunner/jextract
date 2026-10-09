@@ -323,6 +323,17 @@ class MacroParserImpl implements AutoCloseable {
                         yield entry.success(treeMaker.toType(decl), value);
                     }
                     case StrLiteral -> {
+                        // clang_EvalResult_getAsStr stops at the first zero byte, which truncates
+                        // wide and Unicode literals (L"SHA256" comes back as "S"). Decode those from
+                        // the literal's own spelling instead, or fail rather than yield a wrong value.
+                        Optional<String> wide = stringLiteralSpelling(decl)
+                                .filter(StringLiteralDecoder::isWide);
+                        if (wide.isPresent()) {
+                            Optional<String> value = wide.flatMap(StringLiteralDecoder::decode);
+                            yield value.isPresent() ?
+                                    entry.success(treeMaker.toType(decl), value.get()) :
+                                    entry.failure(null);
+                        }
                         String value = result.getAsString();
                         yield entry.success(treeMaker.toType(decl), value);
                     }
@@ -334,6 +345,26 @@ class MacroParserImpl implements AutoCloseable {
                 };
                 newEntry.update();
             }
+        }
+
+        /**
+         * Returns the spelling of the string literal a macro variable is initialized with, if any.
+         */
+        static Optional<String> stringLiteralSpelling(Cursor decl) {
+            String[] spelling = new String[1];
+            findStringLiteral(decl, spelling);
+            return Optional.ofNullable(spelling[0]);
+        }
+
+        private static void findStringLiteral(Cursor cursor, String[] spelling) {
+            cursor.forEachShortCircuit(c -> {
+                if (c.kind0() == CursorKind.StringLiteral.value()) {
+                    spelling[0] = c.spelling();
+                } else {
+                    findStringLiteral(c, spelling);
+                }
+                return spelling[0] == null;
+            });
         }
 
         void reparseMacros(boolean recovery) {

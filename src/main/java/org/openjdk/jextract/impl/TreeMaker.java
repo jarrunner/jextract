@@ -231,8 +231,8 @@ class TreeMaker {
         Declaration.Constant macro = Declaration.constant(pos, name, value, type);
         String valueString = value.toString();
         if (value instanceof String) {
-            // quote string literal
-            valueString = String.format("\"%1$s\"", valueString);
+            // quote string literal, escaping what cannot appear raw in a comment (NUL, newlines, "*/")
+            valueString = String.format("\"%1$s\"", Utils.quote(valueString).replace("*/", "*\\/"));
         } else if (Utils.isPointer(type)) {
             // add pointer cast to make it look different from a numeric constant
             valueString = String.format("(void*) %1$s", valueString);
