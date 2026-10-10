@@ -22,9 +22,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-24.04, windows-latest]
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             TARGET: clang+llvm-13.0.0-x86_64-linux-gnu-ubuntu-20.04
             ARCHIVE_EXT: "tar.xz"
             LIB_DIR: lib
@@ -159,7 +159,7 @@ jobs:
         cd build
         if [ "${{ matrix.os }}" = windows-latest ]; then 7z a -tzip ../jextract-teavm-${{ matrix.NAME }}.zip jextract-teavm > /dev/null; else tar -czf ../jextract-teavm-${{ matrix.NAME }}.tar.gz jextract-teavm; fi
 
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@v6
       with:
         name: jextract-teavm-${{ matrix.NAME }}
         path: jextract-teavm-${{ matrix.NAME }}.*
@@ -168,9 +168,9 @@ jobs:
   release:
     if: startsWith(github.ref, 'refs/tags/teavm-v')
     needs: [image]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: in
       - name: 'Publish the release'
